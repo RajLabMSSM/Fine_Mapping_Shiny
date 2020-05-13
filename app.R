@@ -161,7 +161,7 @@ prepare_files <- function(root="~/Desktop/Fine_Mapping/Data/GWAS/Nalls23andMe_20
   locus_plots <- lapply(names(locus_plots), function(locus){
     new_path <- file.path("www","plots",paste0(locus,"_plot.png"))
     file.copy(from = locus_plots[[locus]], 
-              to = new_path)
+              to = new_path, overwrite = T)
     return(new_path)
   }) %>% unlist() %>% `names<-`(names(locus_plots))
   saveRDS(locus_plots, "www/locus_plots.RDS")
