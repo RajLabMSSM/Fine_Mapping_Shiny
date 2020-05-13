@@ -1,6 +1,7 @@
 
 library(shiny)
 library(dplyr)
+# devtools::install_github('rstudio/DT')
 library(DT)
 library(data.table)
 library(ggplot2)
@@ -13,6 +14,8 @@ construct_SNPs_labels <- function(subset_DT, lead=T, method=T, consensus=T, verb
   printer("+ PLOT:: Constructing SNP labels...", v=verbose)
   labelSNPs <- data.table::data.table() 
   subset_DT <- data.table::as.data.table(subset_DT)
+  CS_cols <- colnames(subset_DT)[endsWith(colnames(subset_DT),".Credible_Set")]
+  methods <-gsub("\\.Credible_Set","",CS_cols)
   
   ## BEFORE fine-mapping  
   if(lead){
@@ -20,7 +23,7 @@ construct_SNPs_labels <- function(subset_DT, lead=T, method=T, consensus=T, verb
     before$type <- "Lead SNP"
     before$color <- "red"
     before$shape <- 18
-    before$size <- 3
+    before$size <- 2
     labelSNPs <- rbind(labelSNPs, before, fill=T)
   }
   if(method){
@@ -30,7 +33,10 @@ construct_SNPs_labels <- function(subset_DT, lead=T, method=T, consensus=T, verb
       after$type <- "Credible Set"  
       after$color<- "green3"
       after$shape <- 1
-      after$size=3
+      after$size=4 
+      after$Credible_Sets <- lapply(1:nrow(after), function(i){
+        paste(methods[data.frame(after)[i,CS_cols]>0], collapse=", ")
+      }) %>% unlist() 
       labelSNPs <- rbind(labelSNPs, after, fill=T) 
     } 
   } 
@@ -41,7 +47,10 @@ construct_SNPs_labels <- function(subset_DT, lead=T, method=T, consensus=T, verb
       cons_SNPs$type <- "Consensus SNP"
       cons_SNPs$color <- "darkgoldenrod1"
       cons_SNPs$shape <- 1
-      cons_SNPs$size=4
+      cons_SNPs$size=6
+      cons_SNPs$Credible_Sets <- lapply(1:nrow(cons_SNPs), function(i){
+        paste(methods[data.frame(cons_SNPs)[i,CS_cols]>0], collapse=", ")
+      }) %>% unlist() 
       labelSNPs <- rbind(labelSNPs, cons_SNPs, fill=T)
     } 
   } 
@@ -64,6 +73,10 @@ construct_SNPs_labels <- function(subset_DT, lead=T, method=T, consensus=T, verb
       dplyr::arrange(rowID) %>% 
       dplyr::slice(n())  
   }
+  
+  labelSNPs$type <- factor(x = labelSNPs$type, 
+                           levels = c("Lead SNP","Credible Set","Consensus SNP"), 
+                           ordered = T)
   return(as.data.frame(labelSNPs))
 }
 
@@ -112,15 +125,27 @@ find_consensus_SNPs <- function(finemap_DT,
   return(finemap_DT)
 }
 
-make_locus_dict <- function(root="Data/GWAS/Nalls23andMe_2019",
-                            pattern="*_ggbio*.png|multi_finemap_plot.png"){ 
+
+
+assign_lead_SNP <- function(new_DT, verbose=T){
+  if(sum(new_DT$leadSNP)==0){
+    printer("+ leadSNP missing. Assigning new one by min p-value.", v=verbose)
+    top.snp <- head(arrange(new_DT, P, desc(Effect)))[1,]$SNP
+    new_DT$leadSNP <- ifelse(new_DT$SNP==top.snp,T,F)
+  }
+  return(new_DT)
+}
+
+make_locus_dict <- function(root="~/Desktop/Fine_Mapping/Data/GWAS/Nalls23andMe_2019",
+                            pattern="*_ggbio*.png|multi_finemap_plot.png",
+                            slice_n=1){ 
   locus_plots_df <- data.frame(path=list.files(path = root, 
                                                pattern = pattern,
                                                full.names = T, recursive = T), stringsAsFactors = F) %>% 
     dplyr::mutate(locus=basename(dirname(dirname(path)))) %>%
     dplyr::arrange(path) %>%
     dplyr::group_by(locus) %>% 
-    dplyr::slice(1) 
+    dplyr::slice(slice_n) 
   locus_plots <- setNames(locus_plots_df$path, locus_plots_df$locus)
   return(locus_plots)
 }
@@ -128,7 +153,8 @@ make_locus_dict <- function(root="Data/GWAS/Nalls23andMe_2019",
 
 # Only need to run this once beforehand
 prepare_files <- function(root="~/Desktop/Fine_Mapping/Data/GWAS/Nalls23andMe_2019"){
-  # Collect plot paths
+  
+  # ------- Collect plot paths -------
   locus_plots <- make_locus_dict(root=root,
                                  pattern="_ggbio.png|multi_finemap_plot.png")  
   dir.create("www/plots", showWarnings = F, recursive = T)
@@ -140,23 +166,85 @@ prepare_files <- function(root="~/Desktop/Fine_Mapping/Data/GWAS/Nalls23andMe_20
   }) %>% unlist() %>% `names<-`(names(locus_plots))
   saveRDS(locus_plots, "www/locus_plots.RDS")
   
-  # Collect table paths 
+  
+  # ------- Collect table paths -------
   locus_tables <- make_locus_dict(root=root,
                                   pattern="Multi-finemap_results.txt")   
+  leadSNPs <<- c()
   dir.create("www/data", showWarnings = F, recursive = T)
   locus_tables <- lapply(names(locus_tables), function(locus){
+    message(locus)
     new_path <- file.path("www","data",paste0(locus,"_data.csv"))
     dat <- data.table::fread(locus_tables[[locus]])
-    data.table::fwrite(dat, new_path)
-    locus_tables[[locus]] <<- new_path
+    
+    # Do preprocessing beforehand 
+    if(!"Locus" %in% colnames(dat)){
+      dat <- cbind(Locus=locus, dat)
+    }
+    dat$Mb <- dat$POS/1000000  
+    dat <- assign_lead_SNP(dat)
+    dat <- find_consensus_SNPs(dat, verbose = F) 
+    dat$proportion_cases <- round(dat$proportion_cases, 5)
+    dat$mean.PP <- round(dat$mean.PP, 5)
+    
+    write.csv(dat, new_path, row.names = F)
+    # data.table::fwrite(data.table::data.table(dat), new_path,) 
+    
+    # Store lead SNP info
+    leadSNPs <<- append(leadSNPs, subset(dat, leadSNP)$SNP[1])
+    return(new_path)
   }) %>% unlist() %>% `names<-`(names(locus_tables))
+  
+  names(leadSNPs) <-  names(locus_tables)
   saveRDS(locus_tables, "www/locus_tables.RDS")
+  
+  
+  
+  # -------Collect LD paths -------
+  locus_LD <- make_locus_dict(root=root,
+                              pattern="UKB_LD.RDS" )
+  locus_LD <- locus_LD[names(locus_LD)!="plink"]
+  dir.create("www/LD", showWarnings = F, recursive = T)
+  locus_LD <- parallel::mclapply(names(locus_LD), function(locus){
+    message(locus)
+    new_path <- file.path("www","LD",paste0(locus,"_LD.csv"))
+    # Get lead SNP that's ALSO in LD_matrix
+    # dat <- data.table::fread(locus_tables[[locus]]) 
+    # dat <- assign_lead_SNP(subset(dat, SNP %in% colnames(LD_matrix)))
+    # write.csv(dat, locus_tables[[locus]]) # rwrite with new lead SNP
+    # lead_snp <- subset(dat, leadSNP)$SNP[1]
+    if(endsWith(locus_LD[[locus]], suffix = ".RDS")){
+      LD_matrix <- readRDS(locus_LD[[locus]])
+    }
+    if(endsWith(locus_LD[[locus]], suffix = ".RData")){
+      load(locus_LD[[locus]])
+    }
+    
+    LD_df <-  tryCatch(expr = { 
+      LD_df <- data.frame(LD_matrix[,leadSNPs[[locus]] ])
+      LD_df <- cbind(SNP=colnames(LD_matrix), LD_df)
+      colnames(LD_df)[2] <- leadSNPs[[locus]]
+      LD_df
+    }, 
+    error = function(e){
+      LD_df <- data.frame(SNP=colnames(LD_matrix),
+                          r=rep(NA,length( colnames(LD_matrix))))
+      colnames(LD_df)[2] <- leadSNPs[[locus]]  
+      LD_df
+    }, finally = {
+      write.csv(LD_df, new_path, row.names = F) 
+      LD_df 
+    }) 
+    return(new_path)
+  }, mc.cores = 4) %>% unlist() %>% `names<-`(names(locus_LD))
+  saveRDS(locus_LD, "www/locus_LD.RDS") 
 }
 
 
-locus_plots <- readRDS("www/locus_plots.RDS")
-# Collect table paths 
+locus_plots <- readRDS("www/locus_plots.RDS") 
 locus_tables <- readRDS("www/locus_tables.RDS")
+locus_LD <- readRDS("www/locus_LD.RDS")
+
 
 # Dropdown bars
 studies <- "Nalls23andMe_2019" #list.dirs("./Data/GWAS/", full.names = F, recursive = F)
@@ -166,9 +254,9 @@ loci <-  sort(setNames(names(locus_tables), names(locus_tables) ) )
 ui <- fluidPage(
   
   sidebarLayout(position = "left", 
-                sidebarPanel(style = "position:fixed; width:20%; height:95vh; overflow-y:auto",
+                sidebarPanel(style = "position:fixed; width:25%; height:95vh; overflow-y:auto",
                   h2("Fine-mapping Results Browser"),
-                  hr(),
+                  hr(), 
                   selectInput(inputId = "study", 
                               label = "Study : ", 
                               choices = studies, 
@@ -178,12 +266,16 @@ ui <- fluidPage(
                               choices = loci, 
                               selected = "LRRK2", #loci[[1]]
                                 ),
+                  shiny::checkboxInput(inputId = "separate_finemap_methods", 
+                                       label = "Separate fine-mapping methods", 
+                                       value = FALSE),
                   hr(),
                   h4("Interactive plot directions"),
                   shiny::p("Layered results from fine-mapping each locus."), 
                   shiny::p("Hover over each point (SNP) to show more details."),
                   shiny::p("Click and drag to zoom in. Double click to zoom out."),
                   h5("Key:"),
+                  span(strong("r2", style="display: inline;"),p("Pairwise LD correlation with lead GWAS SNP", style="display: inline;")),br(),
                   span(p("◆",style="color:red; font-size:25px; display: inline"), p("Lead GWAS SNP", style="display: inline;")),br(),
                   span(p("○",style="color:green; font-size:25px; display: inline"), p("Union Credible Set SNP", style="display: inline;")),br(),
                   span(p("○",style="color:goldenrod; font-size:25px; display: inline"), p("Consensus SNP", style="display: inline;")),br(),
@@ -209,7 +301,8 @@ ui <- fluidPage(
                       h5(textOutput("locus_name"), align="center"),
                       h6(textOutput("n_snps"), align="center"),
                       # plotOutput("plot")
-                      plotly::plotlyOutput("plotly", height = "600px")
+                      plotly::plotlyOutput("plotly", 
+                                           height = "500px")
                     ) 
                   ), 
                   fluidRow( 
@@ -238,6 +331,18 @@ ui <- fluidPage(
 #### ---------SERVER ####
 server <- function(input, output, session) { 
   
+  import_data <- function(input){
+    # finemap_DT <- data.table::fread("./www/data/WNT3_data.csv")
+    finemap_DT <- data.table::fread(locus_tables[[input$locus]] ) 
+    # Import and merged LD info
+    LD_df <- data.table::fread(locus_LD[[input$locus]]) 
+    LD_df$r2 <- LD_df[,2]^2 
+    finemap_DT <- data.table::merge.data.table(x = finemap_DT,
+                                               y = LD_df,
+                                               by = "SNP")
+    return(finemap_DT)
+  }
+  
   # Plot  
   output$plot <- renderImage({
     # print(locus_plots[[input$locus]]) 
@@ -251,17 +356,15 @@ server <- function(input, output, session) {
   output$locus_name <- renderText({input$locus})
   
   output$plotly <- plotly::renderPlotly({
-    withProgress(message = 'Loading', value = 0, { 
-      # finemap_DT <- data.table::fread( "./Data/GWAS/Nalls23andMe_2019/WNT3/Multi-finemap/Multi-finemap_results.txt" )
-      finemap_DT <- data.table::fread(locus_tables[[input$locus]] )
+    withProgress(message = 'Loading', value = 0, {
+      finemap_DT <- import_data(input)
       finemap_methods <- gsub("\\.PP", "",grep(pattern = "\\.PP", colnames(finemap_DT), value = T ))
       output$n_snps <- renderText({ paste(length(unique(finemap_DT$SNP)),"SNPs") })
+      
       
       n_steps=1+1+length(finemap_methods)+1+1
       incProgress(1/n_steps, detail = paste("Importing data...")) 
       
-      finemap_DT$Mb <- finemap_DT$POS/1000000  
-      finemap_DT <- find_consensus_SNPs(finemap_DT, verbose = F)
       
       snp_plot <- function(finemap_DT, 
                            y_var="-log10(P)",
@@ -272,25 +375,30 @@ server <- function(input, output, session) {
                            ylimits=NULL){
         snp.labs <- construct_SNPs_labels(finemap_DT,
                                           remove_duplicates = F)
-        gp <- ggplot(data=finemap_DT, aes(x=Mb, y=eval(parse(text = y_var)), 
-                                          color=eval(parse(text = y_var)),
-                                          label=CHR,
-                                          label1=SNP,
-                                          label2=Effect,
-                                          label3=P, 
-                                          label4=StdErr,
-                                          label5=A1, 
-                                          label6=A2 ),) + 
-          geom_point(alpha=.5, show.legend = F, size=1) +
-          geom_point(data = snp.labs, 
-                     aes(x=Mb, y=eval(parse(text = y_var))), 
+        
+        gp <- ggplot(data=finemap_DT, aes_string(x="Mb", y=y_var, 
+                                          color="r2",
+                                          label_CHR="CHR",
+                                          label_SNP="SNP",
+                                          label_Effect="Effect",
+                                          label_P="P", 
+                                          label_StdErr="StdErr",
+                                          label_A1="A1", 
+                                          label_A2="A2") ) + 
+          geom_point(alpha=.5, show.legend = T, size=2) +
+          geom_point(data = snp.labs,
+                     aes_string(x="Mb", y=y_var,
+                         label_type="type", 
+                         label_CS="Credible_Sets"), 
                      shape=snp.labs$shape, 
                      color=snp.labs$color, 
-                     size=snp.labs$size - 1, 
+                     size=snp.labs$size, 
                      alpha=.7, show.legend = F) + 
           labs(title =locus,# ifelse(is.null(locus), NULL, paste("Locus :", locus)), 
-               y=paste(ylab_prefix,y_var), color=y_var) + 
+               y=paste(ylab_prefix,y_var)) + 
           scale_y_continuous(n.breaks = 3, expand = expansion(mult = c(0,.2)))  +
+          scale_color_gradient(low = "blue", high = "red", na.value = "gray", 
+                               limits=c(0,1), breaks=c(0,.25,.5,.75,1)) +
           theme_bw() +
           theme(axis.title.y = element_text(size=8), 
                 plot.title = element_text(hjust = .5)) 
@@ -311,13 +419,19 @@ server <- function(input, output, session) {
       plt_list[["gwas"]] <- snp_plot(finemap_DT, 
                                      y_var="-log10(P)", 
                                      ylab_prefix = "GWAS")  
-      for(m in finemap_methods){
-        incProgress(1/n_steps, detail = paste("Creating",m,"plot..."))
-        plt_list[[m]] <- snp_plot(finemap_DT, 
-                                  y_var=paste0(m,".PP"), 
-                                  viridis_color = F,
-                                  ylimits = c(0,1.1))
-      }
+      if(input$separate_finemap_methods){
+        for(m in finemap_methods){
+          incProgress(1/n_steps, detail = paste("Creating",m,"plot..."))
+          plt_list[[m]] <- snp_plot(finemap_DT, 
+                                    y_var=paste0(m,".PP"), 
+                                    viridis_color = F,
+                                    ylimits = c(0,1.1))
+        }  
+      }  
+      
+      # output$plotly_height <- renderUI({
+      #   if(input$separate_finemap_methods){"600px"}else{"400px"}
+      # })
       
       pltly <- plotly::subplot(plt_list, 
                                nrows = length(plt_list), 
@@ -331,28 +445,42 @@ server <- function(input, output, session) {
   
   
   # TABLE 
-  getOpts <- function(file_name="finemapping_results"){
-    opts <- list(extensions = c('FixedColumns',"FixedHeader","Buttons"),
-                 scrollY = 500, sScrollX="100%", bScrollCollapse=T, pageLength=50,
-                 dom = 'frtipB', buttons = list( list(extend = 'csv', filename=file_name),
-                                                 list(extend = 'excel', filename=file_name),
-                                                 list(extend = 'pdf', filename=file_name),
-                                                 list(extend = 'print', filename=file_name),
-                                                 'copy'), paging=F,
-                 fixedColumns = list(leftColumns = 1))
+  getOpts <- function(file_name="finemapping_results", 
+                      rowGroup=NULL){
+    opts <- list(scrollY = 500, 
+                 sScrollX="100%", 
+                 scrollX=T,
+                 bScrollCollapse=T,
+                 pageLength=50,
+                 paging=F,
+                 dom = 'frtipB', 
+                 buttons = list( list(extend = 'csv', filename=file_name),
+                                 list(extend = 'excel', filename=file_name),
+                                 list(extend = 'pdf', filename=file_name),
+                                 list(extend = 'print', filename=file_name),
+                                 'copy'),  
+                 # 1st column is 1 ONLY if rownames=F
+                 fixedColumns = list(leftColumns = 2),
+                 rowGroup = rowGroup)
     return(opts)
   }
   
   # Results table
-  output$results <- DT::renderDT({ 
-    finemap_DT <- data.table::fread(locus_tables[[input$locus]])
-    # createTable(finemap_DT)
-    DT::datatable(finemap_DT, 
-                  options = getOpts(file_name = paste0(input$locus,"results",sep="_")),
-                  filter='top', rownames=F,
-                  class='cell-border stripe',
-                  selection='single',
-                  extensions=c('Buttons','Scroller'))
+  output$results <- DT::renderDT({  
+    finemap_DT <- import_data(input)
+    # Columns are zero-indexed
+    consensus_index <- grep("Consensus_SNP", colnames(finemap_DT))-1
+    
+    DT::datatable(data = finemap_DT, 
+                  extensions = c("Buttons","Scroller","FixedColumns","FixedHeader","RowGroup"),
+                  class='cell-border stripe compact table-hover',
+                  options = getOpts(file_name = paste0(input$locus,"results",sep="_"),
+                                    # Can't have rowGroup and FixedColumns at the same time
+                                    rowGroup = NULL#list(dataSrc = consensus_index)
+                                    ),
+                  filter='top', 
+                  rownames=F, 
+                  selection='single')
   })
 }
 
