@@ -156,7 +156,7 @@ prepare_files <- function(root="~/Desktop/Fine_Mapping/Data/GWAS/Nalls23andMe_20
   
   # ------- Collect plot paths -------
   locus_plots <- make_locus_dict(root=root,
-                                 pattern="_ggbio.png|multi_finemap_plot.png")  
+                                 pattern="_ggbio.png")#multi_finemap_plot.png  
   dir.create("www/plots", showWarnings = F, recursive = T)
   locus_plots <- lapply(names(locus_plots), function(locus){
     new_path <- file.path("www","plots",paste0(locus,"_plot.png"))
