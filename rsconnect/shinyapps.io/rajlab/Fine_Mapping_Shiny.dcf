@@ -1,0 +1,12 @@
+name: Fine_Mapping_Shiny
+title: Fine_Mapping_Shiny
+username:
+account: rajlab
+server: shinyapps.io
+hostUrl: https://api.shinyapps.io/v1
+appId: 2290185
+bundleId: 3140328
+url: https://rajlab.shinyapps.io/Fine_Mapping_Shiny/
+when: 1589345457.07178
+asMultiple: FALSE
+asStatic: FALSE
