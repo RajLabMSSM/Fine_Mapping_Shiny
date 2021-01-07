@@ -155,10 +155,10 @@ all_paths <- readRDS("www/all_paths.RDS")
 ## Dropdown inputs
 studies <-  unique(all_paths$study)
 loci <-  unique(all_paths$locus)
-# default_study <- if("Nalls23andMe_2019" %in% studies) "Nalls23andMe_2019" else studies[1]
-# default_locus <- if("LRRK2" %in% loci) "LRRK2" else subset(all_paths, study==default_study)$locus[1]
-default_study <- "Ripke_2014"
-default_locus <- "1"
+default_study <- if("Nalls23andMe_2019" %in% studies) "Nalls23andMe_2019" else studies[1]
+default_locus <- if("BST1" %in% loci) "BST1" else subset(all_paths, study==default_study)$locus[1]
+# default_study <- "Ripke_2014"
+# default_locus <- "1"
 zooms <- unique(all_paths$zoom)[!is.na(unique(all_paths$zoom))]
 # input <- list(); input$study <- "Ripke_2014"; input$locus <- "1"; output <- list();
 
@@ -167,7 +167,8 @@ ui <- fluidPage(
   
   sidebarLayout(position = "left", 
                 sidebarPanel(style = "position:fixed; width:25%; height:95vh; overflow-y:auto",
-                  h2("Fine-mapping Results Browser"),
+                  h2("echolocatoR Results Portal"),
+                  h3("An interactive database for fine-mapping results."),
                   hr(), 
                   selectInput(inputId = "study", 
                               label = "Study : ", 
@@ -414,7 +415,7 @@ server <- function(input, output, session) {
       #### Separate fine-mapping methods ####
       if(input$separate_finemap_methods){
         for(m in finemap_methods){
-          # incProgress(1/n_steps, detail = paste("Creating",m,"plot..."))
+          incProgress(1/n_steps, detail = paste("Creating",m,"plot..."))
           print(m)
           y_var <- paste0(m,".PP") 
           plt_list[[m]] <- snp_plot(finemap_DT = finemap_DT[Support>0,], 
@@ -422,7 +423,10 @@ server <- function(input, output, session) {
                                     viridis_color =T,
                                     ylimits = c(0,1.1))
         }  
-      }   
+        output$plotly_height <- renderText({"700px"})
+      } else {
+        output$plotly_height <- renderText({"500px"})
+      }  
       pltly <- plotly::subplot(plt_list, 
                                nrows = length(plt_list), 
                                shareY = F, shareX = T,
