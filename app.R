@@ -2,255 +2,167 @@
 library(shiny)
 library(dplyr)
 # devtools::install_github('rstudio/DT')
+# library(echolocatoR)
 library(DT)
 library(data.table)
 library(ggplot2)
 library(plotly) 
 
 
-printer <- function(..., v=T){if(v){print(paste(...))}}
-
-construct_SNPs_labels <- function(subset_DT, lead=T, method=T, consensus=T, verbose=F, remove_duplicates=T){ 
-  printer("+ PLOT:: Constructing SNP labels...", v=verbose)
-  labelSNPs <- data.table::data.table() 
-  subset_DT <- data.table::as.data.table(subset_DT)
-  CS_cols <- colnames(subset_DT)[endsWith(colnames(subset_DT),".Credible_Set")]
-  methods <-gsub("\\.Credible_Set","",CS_cols)
-  
-  ## BEFORE fine-mapping  
-  if(lead){
-    before <- subset( subset_DT %>% arrange(P), leadSNP == T)
-    before$type <- "Lead SNP"
-    before$color <- "red"
-    before$shape <- 18
-    before$size <- 2
-    labelSNPs <- rbind(labelSNPs, before, fill=T)
-  }
-  if(method){
-    # AFTER fine-mapping
-    after = subset(subset_DT, Support>0) 
-    if(dim(after)[1]>0){
-      after$type <- "Credible Set"  
-      after$color<- "green3"
-      after$shape <- 1
-      after$size=4 
-      after$Credible_Sets <- lapply(1:nrow(after), function(i){
-        paste(methods[data.frame(after)[i,CS_cols]>0], collapse=", ")
-      }) %>% unlist() 
-      labelSNPs <- rbind(labelSNPs, after, fill=T) 
-    } 
-  } 
-  if(consensus & "Consensus_SNP" %in% colnames(subset_DT)){
-    # Conensus across all fine-mapping tools
-    cons_SNPs <- subset(subset_DT, Consensus_SNP==T)
-    if(dim(cons_SNPs)[1]>0){
-      cons_SNPs$type <- "Consensus SNP"
-      cons_SNPs$color <- "darkgoldenrod1"
-      cons_SNPs$shape <- 1
-      cons_SNPs$size=6
-      cons_SNPs$Credible_Sets <- lapply(1:nrow(cons_SNPs), function(i){
-        paste(methods[data.frame(cons_SNPs)[i,CS_cols]>0], collapse=", ")
-      }) %>% unlist() 
-      labelSNPs <- rbind(labelSNPs, cons_SNPs, fill=T)
-    } 
-  } 
-  # Convert to GRanges object
-  # labelGR <- transformDfToGr(data=labelSNPs, seqnames = "CHR", start = "POS", end = "POS")
-  # names(labelGR) <- labelGR$SNP
-  # plotGrandLinear(gr.snp, aes(y = P, x=POS), highlight.gr = labelGR)
-  
-  # If there's duplicates only show the last one
-  if(remove_duplicates){
-    labelSNPs$rowID <- 1:nrow(labelSNPs)
-    labelSNPs <- labelSNPs %>% 
-      dplyr::group_by(SNP) %>% 
-      dplyr::arrange(rowID) %>% 
-      dplyr::slice(n())  
-  } else {
-    labelSNPs$rowID <- 1:nrow(labelSNPs)
-    labelSNPs <- labelSNPs %>% 
-      dplyr::group_by(SNP, type) %>% 
-      dplyr::arrange(rowID) %>% 
-      dplyr::slice(n())  
-  }
-  
-  labelSNPs$type <- factor(x = labelSNPs$type, 
-                           levels = c("Lead SNP","Credible Set","Consensus SNP"), 
-                           ordered = T)
-  return(as.data.frame(labelSNPs))
-}
-
-
-find_consensus_SNPs <- function(finemap_DT,
-                                verbose=T,
-                                credset_thresh=.95,
-                                consensus_thresh=2,
-                                sort_by_support=T,
-                                exclude_methods=NULL){
-  printer("+ Identifying Consensus SNPs...",v=verbose)
-  exclude_methods <- append(exclude_methods,"mean")
-  # Find SNPs that are in the credible set for all fine-mapping tools
-  CS_cols <- colnames(finemap_DT)[endsWith(colnames(finemap_DT),".Credible_Set")]
-  CS_cols <- CS_cols[!(CS_cols %in% paste0(exclude_methods,".Credible_Set"))]
-  if(consensus_thresh=="all"){consensus_thresh<-length(CS_cols)}
-  printer("++ support_thresh =",consensus_thresh)
-  # Get the number of tools supporting each SNP
-  ## Make sure each CS is set to 1
-  support_sub <- subset(finemap_DT, select = CS_cols) %>% data.frame()
-  support_sub[sapply(support_sub, function(e){e>1})] <- 1
-  finemap_DT$Support <- rowSums(support_sub, na.rm = T)
-  finemap_DT$Consensus_SNP <- finemap_DT$Support >= consensus_thresh
-  # Sort
-  if(sort_by_support){
-    finemap_DT <- finemap_DT %>% arrange(desc(Consensus_SNP), desc(Support))
-  }
-  
-  # Calculate mean PP
-  printer("+ Calculating mean Posterior Probability (mean.PP)...")
-  PP.cols <- grep(".PP",colnames(finemap_DT), value = T)
-  PP.cols <- PP.cols[!(PP.cols %in% paste0(exclude_methods,".PP"))]
-  PP.sub <- subset(finemap_DT, select=c("SNP",PP.cols)) %>% data.frame()# %>% unique()
-  PP.sub[is.na(PP.sub)] <- 0
-  if(NCOL(PP.sub[,-1]) > 1){
-    finemap_DT$mean.PP <- rowMeans(PP.sub[,-1], na.rm = T)
-  } else{
-    finemap_DT$mean.PP <- PP.sub[,-1]
-  }
-  finemap_DT$mean.Credible_Set <- ifelse(finemap_DT$mean.PP>=credset_thresh,1,0)
-  
-  # PP.sub %>% arrange(desc(mean.PP)) %>% head()
-  printer("++",length(CS_cols),"fine-mapping methods used.")
-  printer("++",dim(subset(finemap_DT,Support>0))[1],"Credible Set SNPs identified.")
-  printer("++",dim(subset(finemap_DT,Consensus_SNP==T))[1],"Consensus SNPs identified.")
-  return(finemap_DT)
-}
-
-
-
-assign_lead_SNP <- function(new_DT, verbose=T){
-  if(sum(new_DT$leadSNP)==0){
-    printer("+ leadSNP missing. Assigning new one by min p-value.", v=verbose)
-    top.snp <- head(arrange(new_DT, P, desc(Effect)))[1,]$SNP
-    new_DT$leadSNP <- ifelse(new_DT$SNP==top.snp,T,F)
-  }
-  return(new_DT)
-}
-
-make_locus_dict <- function(root="~/Desktop/Fine_Mapping/Data/GWAS/Nalls23andMe_2019",
-                            pattern="*_ggbio*.png|multi_finemap_plot.png",
-                            slice_n=1){ 
+make_locus_df <- function(root="/Volumes/Scizor/Fine_Mapping/Data",
+                          pattern="*_ggbio*.png|multi_finemap_plot.png|^multiview\\.",
+                          slice_n=1){ 
   locus_plots_df <- data.frame(path=list.files(path = root, 
                                                pattern = pattern,
                                                full.names = T, recursive = T), stringsAsFactors = F) %>% 
-    dplyr::mutate(locus=basename(dirname(dirname(path)))) %>%
-    dplyr::arrange(path) %>%
-    dplyr::group_by(locus) %>% 
-    dplyr::slice(slice_n) 
-  locus_plots <- setNames(locus_plots_df$path, locus_plots_df$locus)
-  return(locus_plots)
+    dplyr::mutate(subfolder=basename(dirname(path)) %in% c("Multi-finemap","LD","plink") ) %>% 
+    # Some plots are in their own subfolder, others are not
+    dplyr::mutate(locus=ifelse(subfolder, basename(dirname(dirname(path))), basename(dirname(path))),
+                  dataset=ifelse(subfolder, basename(dirname(dirname(dirname(path)))), basename(dirname(dirname(path))) ),
+                  dataset_type=ifelse(subfolder, basename(dirname(dirname(dirname(dirname(path))))), basename(dirname(dirname(dirname(path)))) ) 
+                  )
+      
+  locus_plots_df$LD_ref <- ifelse(startsWith("multiview\\.",basename(locus_plots_df$path)), strsplit( basename(locus_plots_df$path), "\\.")[[1]][3], NA)
+  locus_plots_df$zoom <- ifelse(startsWith("multiview\\.",basename(locus_plots_df$path)), strsplit( basename(locus_plots_df$path), "\\.")[[1]][4], "1x")
+  locus_plots_df <- locus_plots_df %>% 
+    dplyr::mutate(locus_dir=file.path("www/data",dataset_type,dataset,locus)) %>%
+    dplyr::mutate(plot_path=file.path(locus_dir,"plots",paste(locus,"locus_plot",zoom,"png",sep=".")),
+                  data_path=file.path(locus_dir,"multi_finemap",paste(locus,"multi_finemap","csv.gz",sep=".")),
+                  ld_path=file.path(locus_dir,"LD",gsub("\\.RDS",".csv.gz",basename(path))))
+  
+  # Arbitrarily use one plot per Locus
+  if(!is.null(slice_n)){
+    locus_plots_df <- locus_plots_df %>%
+      dplyr::group_by(locus, dataset_type, LD_ref, zoom) %>% 
+      dplyr::slice(slice_n) 
+  }   
+  return(data.table::data.table(locus_plots_df))
 }
 
 
 # Only need to run this once beforehand
-prepare_files <- function(root="~/Desktop/Fine_Mapping/Data/GWAS/Nalls23andMe_2019"){
+prepare_files <- function(root="/Volumes/Scizor/Fine_Mapping/Data"){
+  ####  Collect plot paths ####
+  locus_plots_df <- make_locus_df(root=root) #pattern = "^multiview\\.*"
   
-  # ------- Collect plot paths -------
-  locus_plots <- make_locus_dict(root=root,
-                                 pattern="_ggbio.png")#multi_finemap_plot.png  
-  dir.create("www/plots", showWarnings = F, recursive = T)
-  locus_plots <- lapply(names(locus_plots), function(locus){
-    new_path <- file.path("www","plots",paste0(locus,"_plot.png"))
-    file.copy(from = locus_plots[[locus]], 
-              to = new_path, overwrite = T)
+  new_plots <- lapply(1:nrow(locus_plots_df), function(i){
+    ROW <- locus_plots_df[i,] 
+    dir.create(dirname(ROW$plot_path), showWarnings = F, recursive = T) 
+    file.copy(from = ROW$path, 
+              to = ROW$plot_path, 
+              overwrite = T)
     return(new_path)
-  }) %>% unlist() %>% `names<-`(names(locus_plots))
-  saveRDS(locus_plots, "www/locus_plots.RDS")
+  }) %>% unlist() 
   
   
-  # ------- Collect table paths -------
-  locus_tables <- make_locus_dict(root=root,
-                                  pattern="Multi-finemap_results.txt")   
-  leadSNPs <<- c()
-  dir.create("www/data", showWarnings = F, recursive = T)
-  locus_tables <- lapply(names(locus_tables), function(locus){
-    message(locus)
-    new_path <- file.path("www","data",paste0(locus,"_data.csv"))
-    dat <- data.table::fread(locus_tables[[locus]])
-    
+  #### Collect table paths ####
+  locus_tables_df <- make_locus_df(root=root,
+                                   pattern="*\\.Multi-finemap.tsv.gz")   
+  
+  locus_tables_df$leadSNP <- parallel::mclapply(1:nrow(locus_tables_df), function(i){
+    ROW <- locus_tables_df[i,]
+    message(ROW$locus_dir)
+    dat <- data.table::fread(ROW$path)
     # Do preprocessing beforehand 
     if(!"Locus" %in% colnames(dat)){
-      dat <- cbind(Locus=locus, dat)
+      dat <- cbind(Locus=ROW$locus, dat)
     }
+    dat <- echolocatoR::update_cols(finemap_dat = dat)
     dat$Mb <- dat$POS/1000000  
-    dat <- assign_lead_SNP(dat)
-    dat <- find_consensus_SNPs(dat, verbose = F) 
-    dat$proportion_cases <- round(dat$proportion_cases, 5)
+    dat <- echolocatoR::assign_lead_SNP(dat)
+    dat <- echolocatoR::find_consensus_SNPs(dat, verbose = F) 
+    if("proportion_cases" %in% colnames(dat)){
+      dat$proportion_cases <- round(dat$proportion_cases, 5)
+    }
     dat$mean.PP <- round(dat$mean.PP, 5)
-    
-    write.csv(dat, new_path, row.names = F)
-    # data.table::fwrite(data.table::data.table(dat), new_path,) 
-    
-    # Store lead SNP info
-    leadSNPs <<- append(leadSNPs, subset(dat, leadSNP)$SNP[1])
-    return(new_path)
-  }) %>% unlist() %>% `names<-`(names(locus_tables))
-  
-  names(leadSNPs) <-  names(locus_tables)
-  saveRDS(locus_tables, "www/locus_tables.RDS")
+    # Write standardized file
+    dir.create(dirname(ROW$data_path), showWarnings = F, recursive = T)
+    data.table::fwrite(dat, ROW$data_path, row.names = F)  
+    leadSNP <- subset(dat, leadSNP)$SNP[1]
+    return(leadSNP)
+  }, mc.cores = parallel::detectCores()
+  ) %>% unlist() 
+
   
   
-  
-  # -------Collect LD paths -------
-  locus_LD <- make_locus_dict(root=root,
-                              pattern="UKB_LD.RDS" )
-  locus_LD <- locus_LD[names(locus_LD)!="plink"]
-  dir.create("www/LD", showWarnings = F, recursive = T)
-  locus_LD <- parallel::mclapply(names(locus_LD), function(locus){
-    message(locus)
-    new_path <- file.path("www","LD",paste0(locus,"_LD.csv"))
-    # Get lead SNP that's ALSO in LD_matrix
-    # dat <- data.table::fread(locus_tables[[locus]]) 
-    # dat <- assign_lead_SNP(subset(dat, SNP %in% colnames(LD_matrix)))
-    # write.csv(dat, locus_tables[[locus]]) # rwrite with new lead SNP
-    # lead_snp <- subset(dat, leadSNP)$SNP[1]
-    if(endsWith(locus_LD[[locus]], suffix = ".RDS")){
-      LD_matrix <- readRDS(locus_LD[[locus]])
+  #### Collect LD paths ####
+  locus_LD_df <- make_locus_df(root=root,
+                               pattern="*UKB_LD.RDS|*1KGphase3_LD.RDS|*1KGphase1_LD.RDS")
+   
+  ld_paths <- parallel::mclapply(1:nrow(locus_LD_df), function(i){
+    ROW <- locus_LD_df[i,]
+    locus <- ROW$locus
+    message(ROW$locus_dir) 
+    # Get lead SNP that's ALSO in LD_matrix 
+    if(endsWith(ROW$path, suffix = ".RDS")){
+      LD_matrix <- readRDS(ROW$path)
     }
-    if(endsWith(locus_LD[[locus]], suffix = ".RData")){
-      load(locus_LD[[locus]])
+    if(endsWith(ROW$path, suffix = ".RData")){
+      load(ROW$path)
     }
     
-    LD_df <-  tryCatch(expr = { 
-      LD_df <- data.frame(LD_matrix[,leadSNPs[[locus]] ])
+    # Get the lead SNP for this dataset's locus (ID'ed by locus_dir)
+    lead_snp <- subset(locus_tables_df, locus_dir==ROW$locus_dir)$leadSNP
+    
+    LD_df <-  tryCatch(expr = {  
+      LD_df <- data.frame(LD_matrix[, lead_snp])
       LD_df <- cbind(SNP=colnames(LD_matrix), LD_df)
-      colnames(LD_df)[2] <- leadSNPs[[locus]]
-      LD_df
+      colnames(LD_df)[2] <- lead_snp
+      return(LD_df)
     }, 
     error = function(e){
       LD_df <- data.frame(SNP=colnames(LD_matrix),
                           r=rep(NA,length( colnames(LD_matrix))))
-      colnames(LD_df)[2] <- leadSNPs[[locus]]  
-      LD_df
+      colnames(LD_df)[2] <-lead_snp
+      return(LD_df)
     }, finally = {
-      write.csv(LD_df, new_path, row.names = F) 
-      LD_df 
+      dir.create(dirname(ROW$ld_path), showWarnings = F, recursive = T) 
+      data.table::fwrite(LD_df, ROW$ld_path, row.names = F) 
+      return(LD_df) 
     }) 
-    return(new_path)
-  }, mc.cores = 4) %>% unlist() %>% `names<-`(names(locus_LD))
-  saveRDS(locus_LD, "www/locus_LD.RDS") 
+    return(ROW$ld_path)
+  }, mc.cores = parallel::detectCores() 
+  ) %>% unlist()  
+   
+ 
+  
+  # Merge paths into one df 
+  ## (each table is only totally accurate 
+  ##if you searched for files of that particular type)  
+  # all_paths <- dplyr::select(locus_plots_df, -c(data_path,ld_path)) %>%
+  #   data.table::merge.data.table( dplyr::select(locus_tables_df, c(locus_dir,data_path)), 
+  #                                 by="locus_dir",
+  #                                 all = T) %>%
+  #   data.table::merge.data.table( dplyr::select(locus_LD_df, c(locus_dir,ld_path)), 
+  #                                 by="locus_dir",
+  #                                 all = T)
+
+  
+  all_paths <- data.frame(file_path=list.files(path = "www/data", full.names = T, recursive = T), stringsAsFactors = F) %>%
+    dplyr::mutate(study_type=basename(dirname(dirname(dirname(dirname(file_path))))),
+                  study=basename(dirname(dirname(dirname(file_path)))),
+                  locus_dir=dirname(dirname(file_path)),
+                  locus=basename(dirname(dirname(file_path))),
+                  file_type=basename(dirname(file_path))) %>%
+    dplyr::mutate(zoom=ifelse(file_type=="plots",strsplit(file_path,"\\.")[[1]][3],NA)) %>%
+    data.table::data.table()
+  
+  saveRDS(all_paths, "www/all_paths.RDS")
 }
 
+### Prepare inputs ####
+all_paths <- readRDS("www/all_paths.RDS")
+## Dropdown inputs
+studies <-  unique(all_paths$study)
+loci <-  unique(all_paths$locus)
+# default_study <- if("Nalls23andMe_2019" %in% studies) "Nalls23andMe_2019" else studies[1]
+# default_locus <- if("LRRK2" %in% loci) "LRRK2" else subset(all_paths, study==default_study)$locus[1]
+default_study <- "Ripke_2014"
+default_locus <- "1"
+zooms <- unique(all_paths$zoom)[!is.na(unique(all_paths$zoom))]
+# input <- list(); input$study <- "Ripke_2014"; input$locus <- "1"; output <- list();
 
-locus_plots <- readRDS("www/locus_plots.RDS") 
-locus_tables <- readRDS("www/locus_tables.RDS")
-locus_LD <- readRDS("www/locus_LD.RDS")
-
-
-# Dropdown bars
-studies <- "Nalls23andMe_2019" #list.dirs("./Data/GWAS/", full.names = F, recursive = F)
-loci <-  sort(setNames(names(locus_tables), names(locus_tables) ) )
-
-#### --------- UI ---------- ####
+#### UI ####
 ui <- fluidPage(
   
   sidebarLayout(position = "left", 
@@ -260,12 +172,11 @@ ui <- fluidPage(
                   selectInput(inputId = "study", 
                               label = "Study : ", 
                               choices = studies, 
-                              selected = "Nalls23andMe_2019"),
-                  selectInput(inputId = "locus", 
-                              label = "Locus : ",  
-                              choices = loci, 
-                              selected = "LRRK2", #loci[[1]]
-                                ),
+                              selected = default_study,
+                  ),
+                  # Create locus options dynamically based on study
+                  uiOutput("locus_selection"), 
+                  # Checkboxes
                   shiny::checkboxInput(inputId = "separate_finemap_methods", 
                                        label = "Separate fine-mapping methods", 
                                        value = FALSE),
@@ -297,9 +208,9 @@ ui <- fluidPage(
                 mainPanel( 
                   fluidRow(
                     column(width = 12,
-                      h4("Interactive plot"),   
-                      h5(textOutput("locus_name"), align="center"),
-                      h6(textOutput("n_snps"), align="center"),
+                      h3("Interactive plot"),   
+                      h4(textOutput("locus_name"), align="center"),
+                      h5(textOutput("n_snps"), align="center"),
                       # plotOutput("plot")
                       plotly::plotlyOutput("plotly", 
                                            height = "500px")
@@ -307,35 +218,57 @@ ui <- fluidPage(
                   ), 
                   fluidRow( 
                     column(width = 12, 
-                      h4("Static plot"), 
-                      plotOutput("plot", inline = T) 
+                      h3("Static plot"),  
+                      # uiOutput("plots", inline = T), 
+                      tabsetPanel(id = "tabset",
+                        tabPanel(title = "1x",
+                          imageOutput("plot_1x",inline = T)
+                                  )
+                      ),
+                      uiOutput("plots",inline = T),
+                     
                     )
                   ),
                   br(),
                   fluidRow( 
                     column(width = 12, 
-                      h4("Fine-mapping results"), 
+                      h3("Fine-mapping results"), 
                       DT::dataTableOutput("results")
                      # tableOutput("results")
                     ) 
                   ),
                   br(),
-                ),
-                
+                ),  
   ),
 )
 
 
 
 
-#### ---------SERVER ####
-server <- function(input, output, session) { 
+#### SERVER ####  
+server <- function(input, output, session) {
   
-  import_data <- function(input){
-    # finemap_DT <- data.table::fread("./www/data/WNT3_data.csv")
-    finemap_DT <- data.table::fread(locus_tables[[input$locus]] ) 
+  ### Dyanimcally render locus options
+  output$locus_selection <- renderUI({ 
+    loci <- unique(subset(all_paths, study==input$study)$locus) 
+    selectInput(inputId = "locus", 
+                label = "Locus : ",  
+                choices = loci, 
+                selected = default_locus,  
+    ) 
+  })
+
+  #### Data + LD ####
+  import_data <- function(input){ 
+    print(paste("study:",input$study))
+    print(paste("locus:",input$locus))
+    data_path <- subset(all_paths, study==input$study & locus==input$locus & file_type=="multi_finemap")$file_path[1] 
+    ld_path <- subset(all_paths, study==input$study & locus==input$locus & file_type=="LD")$file_path[1] 
+    print(paste("data_path:",data_path))
+    finemap_DT <- data.table::fread(data_path) 
     # Import and merged LD info
-    LD_df <- data.table::fread(locus_LD[[input$locus]]) 
+    print(paste("ld_path:",ld_path))
+    LD_df <- data.table::fread(ld_path) 
     LD_df$r2 <- LD_df[,2]^2 
     finemap_DT <- data.table::merge.data.table(x = finemap_DT,
                                                y = LD_df,
@@ -343,26 +276,79 @@ server <- function(input, output, session) {
     return(finemap_DT)
   }
   
-  # Plot  
-  output$plot <- renderImage({
-    # print(locus_plots[[input$locus]]) 
-    plot_info <- tryCatch(expr = {list(src = locus_plots[[input$locus]], width="100%") },
-                     error=function(e){
-                       list(src = "./shiny_input/icons/under_construction.png", width="40px")
-                       }) 
-    return(plot_info)
-  }, deleteFile = FALSE)
+  # Plot   
   
-  output$locus_name <- renderText({input$locus})
   
+  #### Iterate over multiple zoomed static views ####
+  ## Reset plots to avoid previous plots appearing
+  get_plots_df <- function(input, zoom=NULL){
+    plots_sub <- subset(all_paths, study==input$study & locus==input$locus & file_type=="plots")
+    if(any(zoom %in% plots_sub$zoom) ){
+      plots_sub <- subset(plots_sub, zoom=zoom)
+    }
+    return(plots_sub)
+  }
+   
+   
+  
+  
+  #### EXAMPLE ITERATIVE PLOTS
+  # Source: https://gist.github.com/wch/5436415/
+  
+  # # Insert the right number of plot output objects into the web page
+  # output$plots <- renderUI({
+  #   plots_sub <- get_plots_df(input=input)
+  #   plot_output_list <- lapply(unique(plots_sub$zoom), function(z) {
+  #     plotname <- paste("plot", z, sep="_")
+  #     plot_output <- plotOutput(plotname, height = 280, width = 250) 
+  #     appendTab(inputId="tabset",
+  #               tabPanel(title = verbatimTextOutput(plotname), plot_output)
+  #     )
+  #   })
+  #   # Convert the list to a tagList - this is necessary for the list of items
+  #   # to display properly.
+  #   do.call(tagList, plot_output_list)
+  # })
+  
+  
+  # Call renderPlot for each one. Plots are only actually generated when they
+  # are visible on the web page.
+  for (z in zooms) {
+    # Need local so that each item gets its own number. Without it, the value
+    # of i in the renderPlot() will be the same across all instances, because
+    # of when the expression is evaluated.
+    local({  
+      print(paste("z:",z)) 
+      plotname <- paste("plot", z, sep="_")
+      print(paste("plotname:",plotname))
+      output[[plotname]] <- renderImage({    
+        plots_sub <- get_plots_df(input, zoom = z) 
+        print(paste("plots_sub:",plots_sub))
+        plot_info <- tryCatch(expr = {list(src=plots_sub$file_path, width="100%") },
+                              error=function(e){
+                                list(src = "./shiny_input/icons/under_construction.png", width="40px")
+                              }) 
+        return(plot_info) 
+      }, deleteFile = F) 
+    })
+  }
+  
+  
+  
+  
+  
+  
+  #### Locus name ####
+  output$locus_name <- renderText({paste("Locus:",input$locus)})
+  
+  #### Interactive plot ####
   output$plotly <- plotly::renderPlotly({
     withProgress(message = 'Loading', value = 0, {
       finemap_DT <- import_data(input)
       finemap_methods <- gsub("\\.PP", "",grep(pattern = "\\.PP", colnames(finemap_DT), value = T ))
       output$n_snps <- renderText({ paste(length(unique(finemap_DT$SNP)),"SNPs") })
       
-      
-      n_steps=1+1+length(finemap_methods)+1+1
+      n_steps <- 1+1+length(finemap_methods)+1+1
       incProgress(1/n_steps, detail = paste("Importing data...")) 
       
       
@@ -372,10 +358,14 @@ server <- function(input, output, session) {
                            locus=NULL, 
                            interactive=T,
                            viridis_color=F,
-                           ylimits=NULL){
-        snp.labs <- construct_SNPs_labels(finemap_DT,
-                                          remove_duplicates = F)
-        
+                           ylimits=NULL, 
+                           facet_formula=NULL){ 
+        if(y_var!="-log10(P)"){
+          finemap_DT[[y_var]] <- as.numeric(finemap_DT[[y_var]])
+        } 
+        snp.labs <- echolocatoR::construct_SNPs_labels(finemap_DT,
+                                                       remove_duplicates = F)
+     
         gp <- ggplot(data=finemap_DT, aes_string(x="Mb", y=y_var, 
                                           color="r2",
                                           label_CHR="CHR",
@@ -387,30 +377,30 @@ server <- function(input, output, session) {
                                           label_A2="A2") ) + 
           geom_point(alpha=.5, show.legend = T, size=2) +
           geom_point(data = snp.labs,
-                     aes_string(x="Mb", y=y_var,
-                         label_type="type", 
-                         label_CS="Credible_Sets"), 
+                     aes_string(x="Mb", y=y_var), 
                      shape=snp.labs$shape, 
                      color=snp.labs$color, 
                      size=snp.labs$size, 
+                     stroke=2, 
                      alpha=.7, show.legend = F) + 
           labs(title =locus,# ifelse(is.null(locus), NULL, paste("Locus :", locus)), 
                y=paste(ylab_prefix,y_var)) + 
-          scale_y_continuous(n.breaks = 3, expand = expansion(mult = c(0,.2)))  +
-          scale_color_gradient(low = "blue", high = "red", na.value = "gray", 
-                               limits=c(0,1), breaks=c(0,.25,.5,.75,1)) +
+          scale_y_continuous(n.breaks = 3, expand = expansion(mult = c(0,.2))) + 
           theme_bw() +
           theme(axis.title.y = element_text(size=8), 
                 plot.title = element_text(hjust = .5)) 
         
         if(!is.null(ylimits)){
-          gp <- gp + ylim(ylimits)
+          gp <- suppressMessages(gp + ylim(ylimits))
         }
         if(viridis_color){
           gp <- gp + scale_color_viridis_c()
-        }  
+        } else {
+          gp <- gp + scale_color_gradient(low = "blue", high = "red", na.value = "gray",
+                                          limits=c(0,1), breaks=c(0,.5,1))
+        }
         if(interactive){
-          return(plotly::ggplotly(gp))
+          return( plotly::ggplotly(gp) )
         } else {return(gp)}
       }
       
@@ -418,33 +408,32 @@ server <- function(input, output, session) {
       incProgress(1/n_steps, detail = paste("Creating GWAS plot..."))
       plt_list[["gwas"]] <- snp_plot(finemap_DT, 
                                      y_var="-log10(P)", 
-                                     ylab_prefix = "GWAS")  
+                                     ylab_prefix = "GWAS")
+      
+      
+      #### Separate fine-mapping methods ####
       if(input$separate_finemap_methods){
         for(m in finemap_methods){
-          incProgress(1/n_steps, detail = paste("Creating",m,"plot..."))
-          plt_list[[m]] <- snp_plot(finemap_DT, 
-                                    y_var=paste0(m,".PP"), 
-                                    viridis_color = F,
+          # incProgress(1/n_steps, detail = paste("Creating",m,"plot..."))
+          print(m)
+          y_var <- paste0(m,".PP") 
+          plt_list[[m]] <- snp_plot(finemap_DT = finemap_DT[Support>0,], 
+                                    y_var=y_var, 
+                                    viridis_color =T,
                                     ylimits = c(0,1.1))
         }  
-      }  
-      
-      # output$plotly_height <- renderUI({
-      #   if(input$separate_finemap_methods){"600px"}else{"400px"}
-      # })
-      
+      }   
       pltly <- plotly::subplot(plt_list, 
                                nrows = length(plt_list), 
                                shareY = F, shareX = T,
                                titleY = T)
       incProgress(1/n_steps, detail = paste("Rendering merged plots...")) 
-      return(pltly) 
-      # incProgress(1/n_steps, detail = paste("Complete!")) 
+      return(pltly)  
     }) 
   }) # withProgress
   
   
-  # TABLE 
+  #### Data table #### 
   getOpts <- function(file_name="finemapping_results", 
                       rowGroup=NULL){
     opts <- list(scrollY = 500, 
