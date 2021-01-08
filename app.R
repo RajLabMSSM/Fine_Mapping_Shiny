@@ -10,6 +10,21 @@ library(ggplot2)
 library(plotly) 
 
 
+get_study_metadata <- function(metadata_path="./www/metadata/GWAS-QTL_data_dictionary.xlsx"){
+  gwas <- suppressMessages(readxl::read_excel(metadata_path, sheet = "GWAS"))
+  qtl <- suppressMessages(readxl::read_excel(metadata_path, sheet = "QTL"))
+  meta <- data.table::rbindlist(list(cbind(dataset_type="GWAS", gwas), 
+                                     cbind(dataset_type="QTL",qtl)), fill=T) %>%
+    dplyr::select(dataset_type, dataset, phenotype, prop_cases, build, reference)
+  return(meta) 
+}
+
+label_studies <- function(all_paths){
+  meta <- get_study_metadata()
+  meta_sub <- subset(meta, dataset %in% gsub("\\.n_causal1","",unique(all_paths$study)))
+  return(meta_sub)
+}
+
 make_locus_df <- function(root="/Volumes/Scizor/Fine_Mapping/Data",
                           pattern="*_ggbio*.png|multi_finemap_plot.png|^multiview\\.",
                           slice_n=1){ 
@@ -151,11 +166,20 @@ prepare_files <- function(root="/Volumes/Scizor/Fine_Mapping/Data"){
   saveRDS(all_paths, "www/all_paths.RDS")
 }
 
+
+
 ### Prepare inputs ####
 all_paths <- readRDS("www/all_paths.RDS")
 all_paths <- subset(all_paths, study!="LRRK2")  # subfolder issue
 ## Dropdown inputs
+
+
+                 
+                 
+## Gather studies
 studies <-  unique(all_paths$study)
+meta <- label_studies(all_paths = all_paths)
+## Gather loci
 loci <-  unique(all_paths$locus)
 default_study <- if("Nalls23andMe_2019" %in% studies) "Nalls23andMe_2019" else studies[1]
 default_locus <- if("BST1" %in% loci) "BST1" else subset(all_paths, study==default_study)$locus[1]
@@ -168,57 +192,49 @@ zooms <- unique(all_paths$zoom)[!is.na(unique(all_paths$zoom))]
 ui <- fluidPage(
   
   sidebarLayout(position = "left", 
-                sidebarPanel(style = "position:fixed; width:25%; height:95vh; overflow-y:auto",
+                sidebarPanel(style = "position:fixed; width:25%; height:95vh; z-index:100; overflow-y:auto",
                   div(
                     a(imageOutput(outputId = "echoR_logo", inline = T), href="https://github.com/RajLabMSSM/echolocatoR", target="_blank"),
                     h2("echolocatoR Results Portal"),
-                    h4("An interactive database for fine-mapping results generated using",a(em("echolocatoR"), href="https://github.com/RajLabMSSM/echolocatoR", target="_blank"),"."),
-                  style="background-color:'darkgrey'"),
-                  a(imageOutput(outputId = "GH_logo",inline = T), href="https://github.com/RajLabMSSM/Fine_Mapping_Shiny", target="_blank"),
-                  
+                    h4("An interactive database for fine-mapping results generated using",a(em("echolocatoR"), href="https://github.com/RajLabMSSM/echolocatoR", target="_blank"),".") 
+                  ), 
                   ## starts interactions
-                  hr(), 
+                  hr(),  
                   selectInput(inputId = "study", 
-                              label = "Study : ", 
+                              label = h3("Study", tipify(a(href="#metdata_header",icon("far fa-question-circle"), style="size: 10px;"), title = "Click for study metadata.", placement = "right", trigger = "hover") ),
                               choices = studies, 
                               selected = default_study,
-                  ),
+                  ),  
+                  
                   # Create locus options dynamically based on study
-                  uiOutput("locus_selection"), 
-                  # Checkboxes
-                  shiny::checkboxInput(inputId = "separate_finemap_methods", 
-                                       label = "Separate fine-mapping methods", 
-                                       value = FALSE),
-                  hr(),
-                  h4("Interactive plot directions"),
-                  shiny::p("Layered results from fine-mapping each locus."), 
-                  shiny::p("Hover over each point (SNP) to show more details."),
-                  shiny::p("Click and drag to zoom in. Double click to zoom out."),
-                  h5("Key:"),
+                  uiOutput("locus_selection"),  
+                  
+                  h3("Key"),
                   span(strong("r2", style="display: inline;"),p("Pairwise LD correlation with lead GWAS SNP", style="display: inline;")),br(),
                   span(p("◆",style="color:red; font-size:25px; display: inline"), p("Lead GWAS SNP", style="display: inline;")),br(),
                   span(p("○",style="color:green; font-size:25px; display: inline"), p("Union Credible Set SNP", style="display: inline;")),br(),
-                  span(p("○",style="color:goldenrod; font-size:25px; display: inline"), p("Consensus SNP", style="display: inline;")),br(),
-                  # tags$ul(
-                  #   tags$li(span(p("◆",style="color:red, size:10"), p("Lead GWAS SNP"))),
-                  #   tags$li(span(p("○",style="color:green"), p("Union Credible Set SNP")),
-                  #   tags$li(p("○",style="color:goldenrod"), p("Consensus SNP")),
-                  # ),
-                  h4("Fine-mapping results"),
-                  shiny::p("Raw summary statistics and fine-mapping results for each locus."), 
-                  hr(),
-                  h4("Authors"),
+                  span(p("○",style="color:goldenrod; font-size:25px; display: inline"), p("Consensus SNP", style="display: inline;")),br(), 
+                   
+                  h3("Authors"),
                   p(a("Raj Lab", href="www.rajlab.org"),br(),
                     "Dept. of Neuroscience, Dept. of Genetics & Genomic Sciences",br(), 
-                    "Icahn School of Medicine at Mount Sinai, New York, NY")
+                    "Icahn School of Medicine at Mount Sinai, New York, NY"),
+                  
+                  a(imageOutput(outputId = "GH_logo",inline = T), href="https://github.com/RajLabMSSM/Fine_Mapping_Shiny", target="_blank"),
                 ),
+                
                 
                 
                 #### Plots & Data ####
                 mainPanel( 
                   fluidRow(
                     column(width = 12,
-                      h3("Interactive plot"),    
+                      h3("Interactive plot", tipify(a(icon("far fa-question-circle"), style="size: 10px;"), title = paste("Instructions:","Hover for details.","Click & drag to zoom in. Double click to zoom out."), placement = "right", trigger = "hover") ),    
+                      p("GWAS/QTL summary statistics."),
+                      # Checkboxes
+                      shiny::checkboxInput(inputId = "separate_finemap_methods", 
+                                           label = "Separate fine-mapping methods", 
+                                           value = FALSE),
                       h4(textOutput("locus_name"), align="center"),
                       h5(textOutput("n_snps"), align="center"),
                       # plotOutput("plot")
@@ -243,11 +259,19 @@ ui <- fluidPage(
                   fluidRow( 
                     column(width = 12, 
                       h3("Fine-mapping results"), 
+                      p("Standardized GWAS/QTL summary statistics and fine-mapping results for the selected locus."),
                       DT::dataTableOutput("results")
                      # tableOutput("results")
                     ) 
                   ),
                   br(),
+                  fluidRow( 
+                    column(width = 12, 
+                           h3("Study metadata", id="metdata_header"), 
+                           DT::dataTableOutput("metadata"), 
+                    ) 
+                  ), 
+                  br()
                 ),  
   ),
 )
@@ -257,6 +281,7 @@ ui <- fluidPage(
 
 #### SERVER ####  
 server <- function(input, output, session) {
+  #### Logos ####
   output$echoR_logo <- renderImage({ 
     tryCatch(expr = {list(src="./www/icons/echolocatoR_logo-min.png",  width="150px", margin="0px",padding="0px") },
              error=function(e){
@@ -271,26 +296,23 @@ server <- function(input, output, session) {
   })
   
   
-  ### Dyanimcally render locus options
+  
+  ### Dynamically render locus options
   output$locus_selection <- renderUI({ 
-    loci <- unique(subset(all_paths, study==input$study)$locus) 
+    loci <- unique(subset(all_paths, study==input$study)$locus)
     selectInput(inputId = "locus", 
-                label = "Locus : ",  
+                label = h3("Locus", tipify(a(icon("far fa-question-circle"), style="size: 10px;"), title = "NOTE: Locus names do not necessarily reflect the causal gene(s).", placement = "right", trigger = "hover") ),  
                 choices = loci, 
                 selected = default_locus,  
     ) 
   })
 
-  #### Data + LD ####
-  import_data <- function(input){ 
-    print(paste("study:",input$study))
-    print(paste("locus:",input$locus))
+  #### Gather data + LD ####
+  import_data <- function(input){  
     data_path <- subset(all_paths, study==input$study & locus==input$locus & file_type=="multi_finemap")$file_path[1] 
     ld_path <- subset(all_paths, study==input$study & locus==input$locus & file_type=="LD")$file_path[1] 
-    print(paste("data_path:",data_path))
     finemap_DT <- data.table::fread(data_path) 
-    # Import and merged LD info
-    print(paste("ld_path:",ld_path))
+    # Import and merged LD info 
     LD_df <- data.table::fread(ld_path) 
     LD_df$r2 <- LD_df[,2]^2 
     finemap_DT <- data.table::merge.data.table(x = finemap_DT,
@@ -459,7 +481,8 @@ server <- function(input, output, session) {
   }) # withProgress
   
   
-  #### Data table #### 
+  #### Data #### 
+  ## DT ptions
   getOpts <- function(file_name="finemapping_results", 
                       rowGroup=NULL){
     opts <- list(scrollY = 500, 
@@ -480,7 +503,7 @@ server <- function(input, output, session) {
     return(opts)
   }
   
-  # Results table
+  # Results DT
   output$results <- DT::renderDT({  
     finemap_DT <- import_data(input)
     # Columns are zero-indexed
@@ -497,6 +520,22 @@ server <- function(input, output, session) {
                   rownames=F, 
                   selection='single')
   })
+  
+ 
+  ### Metadata ####
+  output$metadata <- DT::renderDT({ 
+    DT::datatable(data = meta, 
+                  extensions = c("Buttons","Scroller","FixedColumns","FixedHeader","RowGroup"),
+                  class='cell-border stripe compact table-hover',
+                  options = getOpts(file_name = "study_metadata",
+                                    # Can't have rowGroup and FixedColumns at the same time
+                                    rowGroup = NULL#list(dataSrc = consensus_index)
+                  ),
+                  filter='top', 
+                  rownames=F, 
+                  selection='single')
+    })
+   
 }
 
 
