@@ -1,5 +1,6 @@
 
 library(shiny)
+library(shinyBS)
 library(dplyr)
 # devtools::install_github('rstudio/DT')
 # library(echolocatoR)
@@ -144,7 +145,7 @@ prepare_files <- function(root="/Volumes/Scizor/Fine_Mapping/Data"){
                   locus_dir=dirname(dirname(file_path)),
                   locus=basename(dirname(dirname(file_path))),
                   file_type=basename(dirname(file_path))) %>%
-    dplyr::mutate(zoom=ifelse(file_type=="plots",strsplit(file_path,"\\.")[[1]][3],NA)) %>%
+    dplyr::mutate(zoom=ifelse(file_type=="plots",strsplit(file_path,"\\.")[[1]][3],"1x")) %>%
     data.table::data.table()
   
   saveRDS(all_paths, "www/all_paths.RDS")
@@ -152,6 +153,7 @@ prepare_files <- function(root="/Volumes/Scizor/Fine_Mapping/Data"){
 
 ### Prepare inputs ####
 all_paths <- readRDS("www/all_paths.RDS")
+all_paths <- subset(all_paths, study!="LRRK2")  # subfolder issue
 ## Dropdown inputs
 studies <-  unique(all_paths$study)
 loci <-  unique(all_paths$locus)
@@ -167,8 +169,14 @@ ui <- fluidPage(
   
   sidebarLayout(position = "left", 
                 sidebarPanel(style = "position:fixed; width:25%; height:95vh; overflow-y:auto",
-                  h2("echolocatoR Results Portal"),
-                  h3("An interactive database for fine-mapping results."),
+                  div(
+                    a(imageOutput(outputId = "echoR_logo", inline = T), href="https://github.com/RajLabMSSM/echolocatoR", target="_blank"),
+                    h2("echolocatoR Results Portal"),
+                    h4("An interactive database for fine-mapping results generated using",a(em("echolocatoR"), href="https://github.com/RajLabMSSM/echolocatoR", target="_blank"),"."),
+                  style="background-color:'darkgrey'"),
+                  a(imageOutput(outputId = "GH_logo",inline = T), href="https://github.com/RajLabMSSM/Fine_Mapping_Shiny", target="_blank"),
+                  
+                  ## starts interactions
                   hr(), 
                   selectInput(inputId = "study", 
                               label = "Study : ", 
@@ -197,19 +205,20 @@ ui <- fluidPage(
                   #   tags$li(p("○",style="color:goldenrod"), p("Consensus SNP")),
                   # ),
                   h4("Fine-mapping results"),
-                  shiny::p("Raw summary statistics and fine-mapping results for each locus."),
-                  
+                  shiny::p("Raw summary statistics and fine-mapping results for each locus."), 
                   hr(),
                   h4("Authors"),
-                  p("Raj Lab"),
-                  p("Dept. of Neuroscience, Dept. of Genetics & Genomic Sciences"),
-                  p("Icahn School of Medicine at Mount Sinai"),
-                  p("New York, NY")
+                  p(a("Raj Lab", href="www.rajlab.org"),br(),
+                    "Dept. of Neuroscience, Dept. of Genetics & Genomic Sciences",br(), 
+                    "Icahn School of Medicine at Mount Sinai, New York, NY")
                 ),
+                
+                
+                #### Plots & Data ####
                 mainPanel( 
                   fluidRow(
                     column(width = 12,
-                      h3("Interactive plot"),   
+                      h3("Interactive plot"),    
                       h4(textOutput("locus_name"), align="center"),
                       h5(textOutput("n_snps"), align="center"),
                       # plotOutput("plot")
@@ -248,6 +257,19 @@ ui <- fluidPage(
 
 #### SERVER ####  
 server <- function(input, output, session) {
+  output$echoR_logo <- renderImage({ 
+    tryCatch(expr = {list(src="./www/icons/echolocatoR_logo-min.png",  width="150px", margin="0px",padding="0px") },
+             error=function(e){
+               list(src = "./shiny_input/icons/under_construction.png", width="40px")
+             })  
+  })
+  output$GH_logo <- renderImage({ 
+    tryCatch(expr = {list(src="./www/icons/github-logo.png",  width="50px", margin="0px",padding="0px") },
+             error=function(e){
+               list(src = "./shiny_input/icons/under_construction.png", width="40px")
+             })  
+  })
+  
   
   ### Dyanimcally render locus options
   output$locus_selection <- renderUI({ 
