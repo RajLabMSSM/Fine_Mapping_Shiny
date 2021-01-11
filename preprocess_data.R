@@ -17,7 +17,7 @@ prepare_files <- function(root="/sc/arion/projects/pd-omics/brian/Fine_Mapping")
   #### Collect table paths #### 
   locus_tables_df <- prepare_tables(root=root,
                                     pattern="*\\.Multi-finemap.tsv.gz",
-                                    force_new_table = F)  
+                                    force_new_table = T)  
   #### Collect LD paths ####
   locus_LD_df <- prepare_LD(root=root,
                             locus_tables_df=locus_tables_df,
@@ -43,7 +43,7 @@ infer_LD_panel <- function(path){
 make_locus_df <- function(root="/sc/arion/projects/pd-omics/brian/Fine_Mapping",
                           pattern,
                           slice_n=NULL){ 
-  locus_plots_df <- data.frame(path=list.files(path = root, 
+  locus_df <- data.frame(path=list.files(path = root, 
                                                pattern = pattern,
                                                full.names = T, recursive = T), stringsAsFactors = F) %>% 
     dplyr::mutate(subfolder=basename(dirname(path)) %in% c("Multi-finemap","LD","plink") ) %>% 
@@ -52,25 +52,23 @@ make_locus_df <- function(root="/sc/arion/projects/pd-omics/brian/Fine_Mapping",
                   dataset=ifelse(subfolder, basename(dirname(dirname(dirname(path)))), basename(dirname(dirname(path))) ),
                   dataset_type=ifelse(subfolder, basename(dirname(dirname(dirname(dirname(path))))), basename(dirname(dirname(dirname(path)))) ) 
     )
+   
+  locus_df$LD_ref <- lapply(basename(locus_df$path), function(x){infer_LD_panel(x)}) %>% unlist() 
+  locus_df <- locus_df %>%  tidyr::separate(path, sep = "[.]", into = c(NA,NA,NA,"zoom"), remove = F)
   
-  # locus_plots_df$LD_ref <- ifelse(startsWith("multiview\\.",basename(locus_plots_df$path)), strsplit( basename(locus_plots_df$path), "\\.")[[1]][3], NA)
-  
-  locus_plots_df$zoom <- ifelse(startsWith("multiview\\.",basename(locus_plots_df$path)), strsplit( basename(locus_plots_df$path), "\\.")[[1]][4], "1x")
-  locus_plots_df <- locus_plots_df %>% 
-    dplyr::mutate(locus_dir=file.path("www/data",dataset_type,dataset,locus),
-                  LD_ref=infer_LD_panel(path)) %>%
+  locus_df <- locus_df %>% 
+    dplyr::mutate(locus_dir=file.path("www/data",dataset_type,dataset,locus)) %>%
     dplyr::mutate(plot_path=file.path(locus_dir,"plots",paste(locus,LD_ref,"locus_plot",zoom,"png",sep=".")),
                   data_path=file.path(locus_dir,"multi_finemap",paste(locus,LD_ref,"multi_finemap","csv.gz",sep=".")),
                   ld_path=file.path(locus_dir,"LD",paste(locus,LD_ref,"LD","csv.gz",sep="."))
-    )
-  
+    ) 
   # Arbitrarily use one plot per Locus
   if(!is.null(slice_n)){
-    locus_plots_df <- locus_plots_df %>%
+    locus_df <- locus_df %>%
       dplyr::group_by(locus, dataset_type, LD_ref, zoom) %>% 
       dplyr::slice(slice_n) 
   }   
-  return(data.table::data.table(locus_plots_df))
+  return(data.table::data.table(locus_df))
 }
 
 
@@ -81,7 +79,7 @@ prepare_plots <- function(root,
                                   pattern=pattern)  
   new_plots <- lapply(1:nrow(locus_plots_df), function(i){
     ROW <- locus_plots_df[i,] 
-    print(ROW$path)
+    print(paste(basename(ROW$path),"==>",basename(ROW$plot_path)))
     dir.create(dirname(ROW$plot_path), showWarnings = F, recursive = T)
     if((!file.exists(ROW$plot_path)) | force_new_plot ){
       file.copy(from = ROW$path, 
@@ -103,7 +101,7 @@ prepare_tables <- function(root,
   # !!!! requires echolocatoR  !!!! 
   locus_tables_df$leadSNP <- parallel::mclapply(1:nrow(locus_tables_df), function(i){
     ROW <- locus_tables_df[i,]
-    print(ROW$path)
+    print(paste(basename(ROW$path),"==>",basename(ROW$data_path)))
     if((!file.exists(ROW$path)) | force_new_table){ 
       dat <- data.table::fread(ROW$path, nThread = 1)
       # Do preprocessing beforehand 
@@ -144,7 +142,7 @@ prepare_LD <- function(root,
                                                                .locus_tables_df=locus_tables_df){
     ROW <- locus_LD_df[i,]
     locus <- ROW$locus
-    print(ROW$path) 
+    print(paste(basename(ROW$path),"==>",basename(ROW$ld_path)))
     if((!file.exists(ROW$ld_path)) | force_new_ld){
       LD_df <- tryCatch(expr = {
         # Get lead SNP that's ALSO in LD_matrix 
@@ -197,12 +195,12 @@ gather_processed_paths <- function(processed_dir="www/data"){
                   locus_dir=dirname(dirname(file_path)),
                   locus=basename(dirname(dirname(file_path))),
                   file_type=basename(dirname(file_path))) %>%
-    dplyr::mutate(zoom=ifelse(file_type=="plots",strsplit(file_path,"\\.")[[1]][3],"1x"),
-                  LD_ref=ifelse(file_type=="LD",ifelse(grepl("1KGphase3",file_path), "1KGphase3", 
-                                                       ifelse(grepl("1KGphase1",file_path),"1KGphase1",
-                                                              ifelse(grepl("UKB",file_path), "UKB", NA))), NA)
-    ) %>%
+    # dplyr::mutate(zoom=ifelse(file_type=="plots", strsplit(basename(file_path),"\\.")[[1]][4], NA)
+    #               ) %>%
     data.table::data.table()
+  all_paths$LD_ref <- lapply(basename(all_paths$file_path), function(x){infer_LD_panel(x)}) %>% unlist()
+  all_paths <- all_paths %>% tidyr::separate(file_path, sep = "[.]", into = c(NA,NA,NA,"zoom"), remove = F)
+  all_paths[all_paths$file_type!="plots","zoom"] <- NA
   return(all_paths)
 }
 

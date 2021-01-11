@@ -5,8 +5,9 @@ account: rajlab
 server: shinyapps.io
 hostUrl: https://api.shinyapps.io/v1
 appId: 2290185
-bundleId: 3143835
+bundleId: 4084105
 url: https://rajlab.shinyapps.io/Fine_Mapping_Shiny/
-when: 1589401491.51828
+when: 1610407154.57559
 asMultiple: FALSE
 asStatic: FALSE
+ignoredFiles: preprocess_data.R|templates/app_plots.R|templates/app_v1.R|templates/dynamic_panels.R
