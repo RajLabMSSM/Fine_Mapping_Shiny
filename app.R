@@ -105,7 +105,7 @@ ui <- fluidPage(
                   ), 
                   fluidRow( 
                     column(width = 12, 
-                      h3("Static plots"),  
+                      h3("Static plots"),   
                       tabsetPanel(id = "plot_tabset", 
                         tabPanel(title = "1x",
                           imageOutput("plot_1x",inline = T)
@@ -116,7 +116,9 @@ ui <- fluidPage(
                         tabPanel(title = "10x",
                                  imageOutput("plot_10x",inline = T)
                         ),
-                        uiOutput("plot_tabs")
+                        uiOutput("plot_tabs"),
+                        br(),
+                        em("* Note: PLAC-seq interactions for astrocytes are missing from these plots as this data is not available",a("(Nott et. al., 2019).",href="https://science.sciencemag.org/content/366/6469/1134.abstract", target="_blank"))
                       ), 
                     )
                   ),
