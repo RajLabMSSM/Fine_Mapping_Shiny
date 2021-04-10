@@ -673,7 +673,7 @@ server <- function(input, output, session) {
       merged_DT <- lapply(1:nrow(dat_paths), function(i){
         ROW <- dat_paths[i,]
         dat <- data.table::fread(ROW$file_path, nThread = 1)
-        dat <- cbind(study=ROW$study, ROW$study_type, dat)
+        dat <- cbind(study=ROW$study, study_type=ROW$study_type, LD_ref=ROW$LD_ref, dat)
         incProgress(1/nrow(dat_paths), detail = paste(round(i/nrow(dat_paths),2)*100,"%"))
         return(dat)
       }) %>% data.table::rbindlist(fill = T)
