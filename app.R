@@ -46,7 +46,7 @@ ui <- fluidPage(
                       span(p("◆",style="color:red; font-size:35px; display: inline"), p("Lead GWAS/QTL SNP", style="display: inline; color: white; font-size: 12px;")),br(),
                       span(p("○",style="color:green; font-size:35px; display: inline"), p("Union Credible Set SNP", style="display: inline; color: white; font-size: 12px;")),br(),
                       span(p("○",style="color:goldenrod; font-size:35px; display: inline"), p("Consensus SNP", style="display: inline; color: white; font-size: 12px;")),br(), 
-                  ),
+                  ),  
                   br(),
                   span(downloadButton("downloadData_bulk", "Bulk Download"), 
                        tipify(a(icon("far fa-question-circle"), style="size: 10px;"), 
@@ -125,8 +125,11 @@ ui <- fluidPage(
                   br(),
                   fluidRow( 
                     column(width = 12, 
+                      ##### Fine-mapping results #####
                       h3("Fine-mapping results"), 
                       p("Standardized GWAS/QTL summary statistics and fine-mapping results for the selected locus."),
+                      h5(a("Column descriptions", href="https://github.com/RajLabMSSM/echolocatoR/tree/dev#multi-finemap-results-files", target="_blank"),
+                         tipify(a(icon("far fa-question-circle"), style="size: 10px;"), title = paste("Description of columns in multi-finemap results."), placement = "right", trigger = "hover") ),    
                       span(downloadButton("downloadData", "Download Full Data"), 
                            tipify(a(icon("far fa-question-circle"), style="size: 10px;"), 
                                   title =  "To speed up the app, only Union Credible Set and lead GWAS/QTL SNPs are displayed. Download the full data here." )
@@ -667,19 +670,32 @@ server <- function(input, output, session) {
     finemap_DT <- import_data(input)
   })
   
-  datasetInput_bulk <- reactive({
+  # datasetInput_bulk <- reactive({
+  #   withProgress(message = 'Gathering and merging all results', value = 0, {
+  #     dat_paths <- subset(all_paths, file_type=="multi_finemap") 
+  #     merged_DT <- lapply(1:nrow(dat_paths), function(i){
+  #       ROW <- dat_paths[i,]
+  #       dat <- data.table::fread(ROW$file_path, nThread = 1)
+  #       dat <- cbind(study=ROW$study, study_type=ROW$study_type, LD_ref=ROW$LD_ref, unique(dat))
+  #       incProgress(1/nrow(dat_paths), detail = paste(round(i/nrow(dat_paths),2)*100,"%"))
+  #       return(dat)
+  #     }) %>% data.table::rbindlist(fill = T)
+  #   })
+  #   return(merged_DT)
+  # })
+  datasetInput_bulk <- function(){
     withProgress(message = 'Gathering and merging all results', value = 0, {
       dat_paths <- subset(all_paths, file_type=="multi_finemap") 
       merged_DT <- lapply(1:nrow(dat_paths), function(i){
         ROW <- dat_paths[i,]
         dat <- data.table::fread(ROW$file_path, nThread = 1)
-        dat <- cbind(study=ROW$study, study_type=ROW$study_type, LD_ref=ROW$LD_ref, dat)
+        dat <- cbind(study=ROW$study, study_type=ROW$study_type, LD_ref=ROW$LD_ref, unique(dat))
         incProgress(1/nrow(dat_paths), detail = paste(round(i/nrow(dat_paths),2)*100,"%"))
         return(dat)
       }) %>% data.table::rbindlist(fill = T)
     })
     return(merged_DT)
-  })
+  }
   
    
   
